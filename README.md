@@ -57,10 +57,10 @@ python scripts/checkpoint.py --workspace "." rollback --id cp_1
 你是资深系统开发助手。现在我们需要在当前系统中安装一个全局的 Antigravity 技能，用于对代码进行精准的备份快照管理与安全回滚。
 请通过你拥有的 write_to_file/shell 工具，在以下全局路径中创建这两个文件，代码直接提取自我当前项目工作区：
 
-1. 路径：C:\Users\韦礼貌\.gemini\antigravity\builtin\skills\conversation_memory\scripts\checkpoint.py
+1. 路径：<家目录>/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py
    内容：请将我工作区下 scripts/checkpoint.py 的完整代码原样写入其中。
 
-2. 路径：C:\Users\韦礼貌\.gemini\antigravity\builtin\skills\conversation_memory\SKILL.md
+2. 路径：<家目录>/.gemini/antigravity/builtin/skills/conversation_memory/SKILL.md
    内容：请全文写入以下 YAML 及 Markdown 配置：
 ---
 name: conversation_memory
@@ -72,16 +72,18 @@ description: >
 
 ## 技能说明
 在长会话开发中，为避免回退出错，修改或新建工作区文件前，必须先在终端运行：
-python "C:/Users/韦礼貌/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<工作区绝对路径>" save -m "<修改内容的清晰总结>"
+python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<工作区绝对路径>" save -m "<修改内容的清晰总结>"
 
 用户要求回退时，先运行：
-python "C:/Users/韦礼貌/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<工作区绝对路径>" list
+python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<工作区绝对路径>" list
 
 找到对应的 ID 运行：
-python "C:/Users/韦礼貌/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<工作区绝对路径>" rollback --id <checkpoint_id>
+python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<工作区绝对路径>" rollback --id <checkpoint_id>
 
 严禁自行人肉重写文件恢复！
 ```
+
+*提示：你可以使用 Python 的 `os.path.expanduser('~')` 或操作系统环境变量（Unix/Mac下为 `$HOME`，Windows下为 `%USERPROFILE%`）来动态解析此 `<家目录>`，以此完美兼容两套操作系统。*
 
 写入完成后，请尝试运行 save 命令创建一个 cp_1 快照进行测试，确认部署成功。
 ```
