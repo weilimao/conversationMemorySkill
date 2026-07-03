@@ -64,16 +64,25 @@ python scripts/checkpoint.py --workspace "." reset
 
 ## 🤖 AI 自动化安装提示词 (AI Auto-installation Prompt)
 
-如果您在新的电脑、系统或开发会话中需要使用此技能，可以直接复制以下提示词并发送给新的 AI 助手，它将自动将此工具配置为全局可用的 Skill：
+如果您在新的电脑、系统或全新的开发会话中需要使用此技能，可以直接复制以下提示词并发送给新的 AI 助手，它将自动将此工具配置为全局可用的 Skill：
 
 ```text
 你是资深系统开发助手。现在我们需要在当前系统中安装一个全局的 Antigravity 技能，用于对代码进行精准的备份快照管理与安全回滚。
-请通过你拥有的 write_to_file/shell 工具，在以下全局路径中创建这两个文件，代码直接提取自我当前项目工作区：
 
-1. 路径：<家目录>/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py
-   内容：请将我工作区下 scripts/checkpoint.py 的完整代码原样写入其中。
+第一步：请你首先根据当前的操作系统，动态定位全局技能的安装路径：
+- Windows系统下：全局 Skill 安装根目录在「家目录」下的 `.gemini\antigravity\builtin\skills\conversation_memory\`。请运行 PowerShell 命令 [System.Environment]::GetFolderPath('UserProfile') 或 Python 代码 import pathlib; print(pathlib.Path.home()) 来自动获取你当前的物理家目录路径（通常格式为 C:\Users\<Username>）。
+- macOS/Linux系统下：全局 Skill 安装根目录在「~/.gemini/antigravity/builtin/skills/conversation_memory/」。其中「~」即为你的用户家目录（通常格式为 /Users/<Username>）。
 
-2. 路径：<家目录>/.gemini/antigravity/builtin/skills/conversation_memory/SKILL.md
+第二步：请通过你的网络读取工具（或直接运行 git/curl 命令）拉取此工具远程 GitHub 仓库中 scripts/checkpoint.py 的代码内容：
+- 仓库地址：https://github.com/weilimao/conversationMemorySkill.git
+- 核心脚本源码直连 URL（你可以使用 read_url_content 等网络工具直接读取并加载其纯文本内容）：https://raw.githubusercontent.com/weilimao/conversationMemorySkill/main/scripts/checkpoint.py
+
+第三步：请通过你拥有的 write_to_file 或 shell 写入工具，在对应系统的全局路径中创建这两个文件：
+
+1. 脚本路径：<第一步获取到的全局安装目录>/scripts/checkpoint.py
+   内容：请将第二步拉取到的 scripts/checkpoint.py 的源码原样写入。
+
+2. 规则路径：<第一步获取到的全局安装目录>/SKILL.md
    内容：请全文写入以下 YAML 及 Markdown 配置：
 ---
 name: conversation_memory
@@ -95,6 +104,7 @@ python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpo
 
 严禁自行人肉重写文件恢复！
 ```
+
 
 *💡 **Windows 下的家目录定位指引**：在 Windows 上，请运行 PowerShell 命令 `[System.Environment]::GetFolderPath('UserProfile')` 或执行 Python 代码 `import pathlib; print(pathlib.Path.home())` 来获取你当前所处 Windows 系统的真实用户家目录绝对路径（通常格式为 `C:\Users\<您的用户名>`），随后在 `<家目录>\.gemini\antigravity\builtin\skills\conversation_memory\` 下部署上述文件即可。对于 macOS 电脑，家目录（`~`）即为 `/Users/<您的用户名>`。*
 
