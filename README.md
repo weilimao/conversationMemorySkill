@@ -53,7 +53,7 @@ python scripts/checkpoint.py --workspace "." rollback --id cp_1
 ```
 
 ### 5. 裁剪历史快照并进行垃圾回收 (GC)
-默认会自动裁剪并只保留最近的 **30次** 快照。超出该上限的历史快照元数据会被抹除，且没有任何快照引用的悬向文件会被物理删除以释放空间：
+默认会自动裁剪并只保留最近的 **30次** 快照。超出该上限的历史快照元数据会被抹除，且没有任何快照引用的悬空文件会被物理删除以释放空间：
 ```bash
 python scripts/checkpoint.py --workspace "." clean --keep 30
 ```
@@ -68,94 +68,54 @@ python scripts/checkpoint.py --workspace "." reset
 
 ## 🤖 AI 自动化安装提示词 (AI Auto-installation Prompt)
 
-如果您在新的电脑、系统或全新的开发会话中需要使用此技能，可以直接复制以下提示词并发送给新的 AI 助手，它将自动将此工具配置为全局可用的插件：
+如果您在新的电脑、系统或全新的开发会话中需要使用此技能，可以直接复制以下提示词并发送给新的 AI 助手，它将**智能识别自身所在的 AI 平台**并自动将此工具配置为最适合它的运行环境：
 
 ```text
-你是资深系统开发助手。现在我们需要在当前系统中安装一个全局的 Antigravity 技能，用于对代码进行精准的备份快照管理与安全回滚。
+你是资深系统开发助手。现在我们需要在当前系统中安装一个全局或项目级的代码修改记忆与安全回退系统，用于在编写代码前自动备份，并在回滚时精准无损地物理还原。
 
-第一步：请你首先根据当前的操作系统，动态定位全局插件技能的安装路径：
-- Windows系统下：全局插件 Skill 安装根目录在「家目录」下的 `.gemini\config\plugins\conversation-memory-plugin\skills\conversation_memory\`。请运行 PowerShell 命令 [System.Environment]::GetFolderPath('UserProfile') 或 Python 代码 import pathlib; print(pathlib.Path.home()) 来自动获取你当前的物理家目录路径（通常格式为 C:\Users\<Username>）。
-- macOS/Linux系统下：全局插件 Skill 安装根目录在「~/.gemini/config/plugins/conversation-memory-plugin/skills/conversation_memory/」。其中「~」即为你的用户家目录（通常格式为 /Users/<Username>）。
+第一步【自检并定位 AI 助手平台】：
+请你首先智能识别你当前所在的 AI 助手/Agent 平台类型，并按照以下规则进行平台自适应安装：
 
-第二步：请通过你的网络读取工具（或直接运行 git/curl 命令）拉取此工具远程 GitHub 仓库中 scripts/checkpoint.py 的代码内容：
+1. 如果你是 Google Antigravity (IDE / CLI / Agent) 系列或 Gemini CLI (agy)：
+   - 你的全局插件技能根目录在「家目录」下的 `.gemini\config\plugins\conversation-memory-plugin\skills\conversation_memory\`。
+   - 提示：在 Windows 下你可以运行 PowerShell 命令 [System.Environment]::GetFolderPath('UserProfile') 或 Python 代码 import pathlib; print(pathlib.Path.home()) 来自动获取你当前的物理家目录绝对路径（如 C:\Users\<Username>）。在 macOS/Linux 下，家目录「~」即为 /Users/<Username>。
+   - 目标文件：
+     - 请将第二步获取到的 scripts/checkpoint.py 的源码写入：<全局插件目录>/scripts/checkpoint.py
+     - 请将本提示词下方的「🚨 核心备份与安全回滚规则（SKILL.md 格式）」全文写入：<全局插件目录>/SKILL.md
+
+2. 如果你是 Claude Code (Anthropic CLI)：
+   - 你的全局配置文件在用户家目录下的 `.clauderc` 中。
+   - 请在用户家目录下创建一个专用的工具目录（如 ~/.claude/tools/），并将第二步获取到的 scripts/checkpoint.py 源码原样写入其中。
+   - 并将本提示词下方的「🚨 核心备份与安全回滚规则」以项目指令或全局规则的形式，追加写入到你的全局 `.clauderc` 配置文件或系统指令中。
+
+3. 如果你是 Cursor、Windsurf 或 Copilot 等 IDE 内置的 AI Agent：
+   - 你通过读取当前项目根目录下的本地 `.cursorrules` 文件来约束行为。
+   - 请直接在用户当前目标开发项目的根目录下创建 `.cursorrules` 文件。
+   - 并将本提示词下方的「🚨 核心备份与安全回滚规则」全文写入其中。同时提示用户将 scripts/checkpoint.py 的源码物理复制到他本地项目的 scripts/ 目录下以备运行。
+
+
+第二步【网络下载核心脚本源码】：
+请通过你的网络读取工具（或直接运行 git/curl 命令）拉取此工具远程 GitHub 仓库中 scripts/checkpoint.py 的代码内容：
 - 仓库地址：https://github.com/weilimao/conversationMemorySkill.git
 - 核心脚本源码直连 URL（你可以使用 read_url_content 等网络工具直接读取并加载其纯文本内容）：https://raw.githubusercontent.com/weilimao/conversationMemorySkill/main/scripts/checkpoint.py
 
-第三步：请通过你拥有的 write_to_file 或 shell 写入工具，在对应系统的全局路径中创建这两个文件：
 
-1. 脚本路径：<第一步获取到的全局安装目录>/scripts/checkpoint.py
-   内容：请将第二步拉取到的 scripts/checkpoint.py 的源码原样写入。
-
-2. 规则路径：<第一步获取到的全局安装目录>/SKILL.md
-   内容：写入以下 YAML 及 Markdown 配置：
----
-name: conversation_memory
-description: >
-  CRITICAL: Always call this skill to save a checkpoint before you modify/create/delete any files in the workspace. Also use this skill's rollback command to restore files to a previous state when the user requests to revert or undo changes.
----
-
-# 智能代码记忆与安全回退技能 (Conversation Memory)
-
-## 技能说明
-在长会话开发中，你（AI助手）会对代码进行多次修改。为了保障用户的代码安全，防止因为多次修改后回退失败导致代码大范围丢失或错乱，**你必须严格遵守本技能的行为规范。**
-
-> [!IMPORTANT]
-> **硬性红线 (HARD RED LINE)**：
-> 1. 在你执行任何代码修改（无论是主要功能实现，还是极细微的Bug修复与微调，如调用 `replace_file_content`, `write_to_file`, `multi_replace_file_content` 等）的**前一步**，你**必须首先**在终端运行保存快照指令。
-> 2. 必须且只能通过 `--files` 参数指定 you本轮计划修改或新建的那些文件。严禁进行全盘无差别备份，从而防止磁盘空间膨胀！
+第三步【落地配置文件与验证】：
+请根据第一步中自检出的平台规范进行落地。
 
 ---
+「🚨 核心备份与安全回滚规则」：
 
-## 行为规范指引
+* 每次修改文件前的备份准则 (Save Checkpoint)
+  在你执行任何代码修改（无论是主要功能开发，还是极细微的Bug修复与微调，如调用 replace_file_content, write_to_file, multi_replace_file_content 等）的前一步，你必须首先在终端运行保存快照指令，且必须使用 --files 参数显式指明你本轮计划修改或新建的特定文件相对路径：
+  python "<checkpoint.py的安装路径>" --workspace "<当前工作区绝对路径>" save -m "<描述本次修改意图>" --files <本轮即将修改或新建的所有文件路径，空格分隔>
 
-### 1. 修改代码前的备份准则 (Save Checkpoint)
-当你确认了修改意图，准备对工作区内的某些文件进行写操作前，**立刻在终端执行如下保存命令**，把这几个文件在修改前的原始状态备份下来：
-
-```powershell
-python "~/.gemini/config/plugins/conversation-memory-plugin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" save -m "<描述本次修改意图>" --files <本轮即将修改或新建的所有文件路径，空格分隔>
-```
-
-*例如，如果你准备进行第二轮修改，微调 `src/main.py` 和新增 `tests/test_api.py`，你必须在写文件前执行：*
-```powershell
-python "~/.gemini/config/plugins/conversation-memory-plugin/skills/conversation_memory/scripts/checkpoint.py" --workspace "e:/GPT/conversationMemorySkill" save -m "第二次微调：增加API校验与单元测试" --files "src/main.py" "tests/test_api.py"
-```
-*这会确保如果本次修改改错了，我们能够 100% 精准地将这两个文件回退到这一步之前的样子，而绝不干扰项目的其他无关部分！*
-
-### 2. 回退与恢复准则 (List & Rollback Checkpoint)
-当用户对修改不满意，提出回退要求时，你必须按以下步骤操作：
-
-#### 步骤一：列出所有已保存的 Checkpoints
-在终端运行以下指令，查看该工作区的历史快照列表：
-```powershell
-python "~/.gemini/config/plugins/conversation-memory-plugin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" list
-```
-
-#### 步骤二：对比差异（可选）
-如果对要回滚到哪个版本不够确定，可以运行 `diff` 指令对比当前状态与目标快照的差异：
-```powershell
-python "~/.gemini/config/plugins/conversation-memory-plugin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" diff --id <checkpoint_id>
-```
-
-#### 步骤三：执行精准回滚
-找到用户所期望的那个 Checkpoint ID（如 `cp_2`）后，在终端执行以下指令将工作区中本快照追踪的文件一键回退到备份时的原始状态：
-```powershell
-python "~/.gemini/config/plugins/conversation-memory-plugin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" rollback --id <checkpoint_id>
-```
-
-#### 步骤四：告知用户结果
-回退成功后，向用户汇报已成功退回至指定版本，并简单列出被恢复和清理的文件。
-
-### 3. 历史快照的磁盘垃圾清理准则 (Clean & GC)
-- 为了防止长期的历史快照无限累积从而占满用户磁盘空间，你应当有意识地对备份库进行清理。
-- 当在 `list` 发现快照节点数较多，或者当用户主动要求“帮我清理一下旧快照”时，你应该在终端运行垃圾回收指令，默认裁剪历史并保留最近的 **30次** 快照：
-  ```powershell
-  python "~/.gemini/config/plugins/conversation-memory-plugin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" clean --keep 30
-  ```
-- **注意**：如果用户要求彻底重置/清空所有快照历史，你应当在终端运行重置命令：
-  ```powershell
-  python "~/.gemini/config/plugins/conversation-memory-plugin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" reset
-  ```
-```
+* 当用户要求回滚或撤销时 (Rollback)
+  严禁自行人肉重写文件恢复！请按以下步骤操作：
+  1. 运行 python "<checkpoint.py的安装路径>" --workspace "<当前工作区绝对路径>" list 列出快照。
+  2. 找到目标 ID，运行 python "<checkpoint.py的安装路径>" --workspace "<当前工作区绝对路径>" rollback --id <checkpoint_id> 进行双向事务回滚。
+  3. 报告回滚结果。
+---
 
 写入完成后，请尝试运行 save 命令创建一个 cp_1 快照进行测试，确认部署成功。
 ```
