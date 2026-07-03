@@ -12,7 +12,7 @@ from pathlib import Path
 # 定义默认忽略的文件夹和文件类型
 IGNORE_DIRS = {
     ".git", ".gemini", "node_modules", "__pycache__", "venv", ".venv",
-    "dist", "build", ".idea", ".vscode", "out", "target", ".history"
+    "dist", "build", ".idea", ".vscode", "out", "target", ".history", ".checkpoints"
 }
 
 IGNORE_EXTS = {
@@ -45,7 +45,22 @@ def calculate_sha256(file_path: Path) -> str:
 class CheckpointManager:
     def __init__(self, workspace_path: str):
         self.workspace = Path(workspace_path).resolve()
-        self.meta_dir = self.workspace / ".gemini" / "checkpoints"
+        self.meta_dir = self.workspace / ".checkpoints"
+        
+        # 兼容旧版本：如果存在旧的 .gemini/checkpoints/ 目录，自动平滑迁移
+        old_meta_dir = self.workspace / ".gemini" / "checkpoints"
+        if old_meta_dir.exists() and old_meta_dir.is_dir():
+            try:
+                if not self.meta_dir.exists():
+                    shutil.move(str(old_meta_dir), str(self.meta_dir))
+                    print("检测到旧版备份数据，已自动迁移至新中性目录: .checkpoints/")
+                    # 尝试清理空的 .gemini 外部目录
+                    old_gemini_parent = self.workspace / ".gemini"
+                    if old_gemini_parent.exists() and not os.listdir(old_gemini_parent):
+                        old_gemini_parent.rmdir()
+            except Exception as e:
+                print(f"警告: 迁移旧备份目录失败 - {e}")
+        
         self.store_dir = self.meta_dir / "store"
         self.metadata_path = self.meta_dir / "metadata.json"
         
@@ -250,7 +265,6 @@ class CheckpointManager:
             return
 
         current_id = metadata["current_checkpoint_id"]
-        # 如果当前指针无效，默认指向最新一个
         current_idx = next((i for i, cp in enumerate(checkpoints) if cp["id"] == current_id), len(checkpoints) - 1)
 
         if current_idx < target_idx:
@@ -276,7 +290,7 @@ class CheckpointManager:
                             print(f" 无法删除文件 {rel_path} - {e}")
         else:
             # 2. 向历史的较旧版本回撤 (Undo)
-            print(f"正在向历史快照 [{checkpoint_id}] 回撤修改...")
+            print(f"正在向历史快照 [{checkpoint_id}]回撤修改...")
             for i in range(current_idx, target_idx, -1):
                 cp = checkpoints[i]
                 manifest = cp["manifest"]
