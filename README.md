@@ -96,8 +96,22 @@ python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpo
 严禁自行人肉重写文件恢复！
 ```
 
-*提示：你可以使用 Python 的 `os.path.expanduser('~')` 或操作系统环境变量（Unix/Mac下为 `$HOME`，Windows下为 `%USERPROFILE%`）来动态解析此 `<家目录>`，以此完美兼容两套操作系统。*
+*💡 **Windows 下的家目录定位指引**：在 Windows 上，请运行 PowerShell 命令 `[System.Environment]::GetFolderPath('UserProfile')` 或执行 Python 代码 `import pathlib; print(pathlib.Path.home())` 来获取你当前所处 Windows 系统的真实用户家目录绝对路径（通常格式为 `C:\Users\<您的用户名>`），随后在 `<家目录>\.gemini\antigravity\builtin\skills\conversation_memory\` 下部署上述文件即可。对于 macOS 电脑，家目录（`~`）即为 `/Users/<您的用户名>`。*
 
 写入完成后，请尝试运行 save 命令创建一个 cp_1 快照进行测试，确认部署成功。
 ```
+
+---
+
+## 🚀 主流 AI 编辑器/Agent（Cursor / Claude Code / Windsurf / Copilot）项目级免安装适配
+
+除了在 Antigravity 中作为全局 Skill 安装外，本项目还支持在**主流 AI 编辑器/Agent 中零配置开箱即用**：
+
+1. **Cursor & Windsurf**：
+   本仓库根目录下已内置了 [`.cursorrules`](file:///e:/GPT/conversationMemorySkill/.cursorrules) 配置文件。当您使用 Cursor 或 Windsurf 打开本工程并进行 AI 编程时，编辑器会自动读取该规则。AI 助手将在每次帮您修改代码前自动保存 Checkpoint，在您要求回滚时自动执行恢复，无需进行任何全局安装！
+2. **Claude Code**：
+   Claude 会自动解析本工程的 [`.cursorrules`](file:///e:/GPT/conversationMemorySkill/.cursorrules)，或者您也可以将该规则直接复制作为项目的开发规则（`Instructions`），它就会在修改文件前调用本地 `python scripts/checkpoint.py save`。
+3. **Copilot / Codex**：
+   会自动识别本地规则文件，执行同等的安全防护。
+
 

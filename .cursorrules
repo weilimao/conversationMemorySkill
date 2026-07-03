@@ -1,0 +1,39 @@
+# AI Agent Checkpoint Rules (Cursor, Claude Code, Windsurf, Copilot, Antigravity)
+
+## 📌 Role & Behavior
+You are a senior developer agent. To ensure absolute code safety and prevent chaotic rollbacks or regression, a local Content-Addressable Checkpoint System is integrated into this project.
+
+---
+
+## 🚨 CRITICAL RULES FOR FILE EDITING
+
+### 1. BEFORE any file modifications (Create/Edit/Delete)
+You **MUST** first run the save command to record the current state of the workspace. Only perform actual file writes AFTER this backup command finishes successfully:
+```bash
+python scripts/checkpoint.py save -m "<Brief description of your upcoming edits or task goal>"
+```
+*Example:*
+`python scripts/checkpoint.py save -m "Preparing to implement checkout validation"`
+
+### 2. WHEN the user requests rollback or undo
+**NEVER** manually rewrite files, erase lines, or attempt to recreate past code by yourself. Follow these steps to perform an absolute, safe rollback:
+1. **List all checkpoints**:
+   ```bash
+   python scripts/checkpoint.py list
+   ```
+2. **Identify the target ID** (e.g. `cp_2`) requested by the user.
+3. **Execute rollback**:
+   ```bash
+   python scripts/checkpoint.py rollback --id <checkpoint_id>
+   ```
+4. **Report the result**: Inform the user which files were restored and which newly added files were deleted.
+
+### 3. Cleanup & GC (Disk Maintenance)
+If the checkpoint list grows long (over 30 snapshots), or if the user asks you to tidy up, run the garbage collector to keep only the latest 30 snapshots and prune unreferenced backup blobs:
+```bash
+python scripts/checkpoint.py clean --keep 30
+```
+To wipe all checkpoints and metadata to reset the workspace:
+```bash
+python scripts/checkpoint.py reset
+```
