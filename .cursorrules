@@ -8,12 +8,14 @@ You are a senior developer agent. To ensure absolute code safety and prevent cha
 ## 🚨 CRITICAL RULES FOR FILE EDITING
 
 ### 1. BEFORE any file modifications (Create/Edit/Delete)
-You **MUST** first run the save command to record the current state of the workspace. Only perform actual file writes AFTER this backup command finishes successfully:
+You **MUST** first run the save command to record the current state of the workspace. Only perform actual file writes AFTER this backup command finishes successfully. 
+**You MUST use the `--files` flag to specify ONLY the files you plan to edit or create in this turn to avoid bloating the snapshot repository.**
+
 ```bash
-python scripts/checkpoint.py save -m "<Brief description of your upcoming edits or task goal>"
+python scripts/checkpoint.py save -m "<Brief description of your upcoming edits or task goal>" --files <space_separated_list_of_files_to_edit_or_create>
 ```
 *Example:*
-`python scripts/checkpoint.py save -m "Preparing to implement checkout validation"`
+`python scripts/checkpoint.py save -m "Implement validation logic" --files "src/App.vue" "server/api.go"`
 
 ### 2. WHEN the user requests rollback or undo
 **NEVER** manually rewrite files, erase lines, or attempt to recreate past code by yourself. Follow these steps to perform an absolute, safe rollback:

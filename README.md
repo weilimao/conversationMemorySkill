@@ -28,9 +28,11 @@ e:\GPT\conversationMemorySkill\
 你可以随时在终端运行此脚本进行手动版本控制：
 
 ### 1. 保存当前工作区快照
+你可以使用 `--files` 显式指定本轮计划修改或新建的文件路径（空格分隔）。这是**强烈推荐**的做法，不仅执行极速，而且能避免元数据记录不必要的项目其他无关文件。
 ```bash
-python scripts/checkpoint.py --workspace "." save -m "完成主页登录逻辑开发"
+python scripts/checkpoint.py --workspace "." save -m "完成主页登录逻辑开发" --files "src/components/Login.vue" "server/auth.go"
 ```
+*(注意：如果不加 `--files` 参数，脚本将自动根据 Git 变动状态 `git status` 抓取需要备份的文件，若无 Git 仓库则会自动收集最近 2 小时内被修改过的文本文件。)*
 
 ### 2. 查看快照历史记录列表
 ```bash
@@ -41,6 +43,7 @@ python scripts/checkpoint.py --workspace "." list
 ```bash
 python scripts/checkpoint.py --workspace "." diff --id cp_1
 ```
+
 
 ### 4. 精确回退到指定快照状态
 ```bash
@@ -93,23 +96,69 @@ description: >
 # 智能代码记忆与安全回退技能 (Conversation Memory)
 
 ## 技能说明
-在长会话开发中，为避免回退出错，修改或新建工作区文件前，必须先在终端运行：
-python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<工作区绝对路径>" save -m "<修改内容的清晰总结>"
+在长会话开发中，你（AI助手）会对代码进行多次修改。为了保障用户的代码安全，防止因为多次修改后回退失败导致代码大范围丢失或错乱，**你必须严格遵守本技能的行为规范。**
 
-用户要求回退时，先运行：
-python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<工作区绝对路径>" list
+> [!IMPORTANT]
+> **硬性红线 (HARD RED LINE)**：
+> 1. 在你执行任何代码修改（无论是主要功能实现，还是极细微的Bug修复与微调，如调用 `replace_file_content`, `write_to_file`, `multi_replace_file_content` 等）的**前一步**，你**必须首先**在终端运行保存快照指令。
+> 2. 必须且只能通过 `--files` 参数指定你**本轮计划修改或新建的那些文件**。严禁进行全盘无差别备份，从而防止磁盘空间膨胀！
 
-找到对应的 ID 运行：
-python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<工作区绝对路径>" rollback --id <checkpoint_id>
+---
 
-严禁自行人肉重写文件恢复！
+## 行为规范指引
+
+### 1. 修改代码前的备份准则 (Save Checkpoint)
+当你确认了修改意图，准备对工作区内的某些文件进行写操作前，**立刻在终端执行如下保存命令**，把这几个文件在修改前的原始状态备份下来：
+
+```powershell
+python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" save -m "<描述本次修改意图>" --files <本轮即将修改或新建的所有文件路径，空格分隔>
 ```
 
+*例如，如果你准备进行第二轮修改，微调 `src/main.py` 和新增 `tests/test_api.py`，你必须在写文件前执行：*
+```powershell
+python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "e:/GPT/conversationMemorySkill" save -m "第二次微调：增加API校验与单元测试" --files "src/main.py" "tests/test_api.py"
+```
+*这会确保如果本次修改改错了，我们能够 100% 精准地将这两个文件回退到这一步之前的样子，而绝不干扰项目的其他无关部分！*
+
+### 2. 回退与恢复准则 (List & Rollback Checkpoint)
+当用户对修改不满意，提出回退要求时，你必须按以下步骤操作：
+
+#### 步骤一：列出所有已保存的 Checkpoints
+在终端运行以下指令，查看该工作区的历史快照列表：
+```powershell
+python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" list
+```
+
+#### 步骤二：对比差异（可选）
+如果对要回滚到哪个版本不够确定，可以运行 `diff` 指令对比当前状态与目标快照的差异：
+```powershell
+python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" diff --id <checkpoint_id>
+```
+
+#### 步骤三：执行精准回滚
+找到用户所期望的那个 Checkpoint ID（如 `cp_2`）后，在终端执行以下指令将工作区中本快照追踪的文件一键回退到备份时的原始状态：
+```powershell
+python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" rollback --id <checkpoint_id>
+```
+
+#### 步骤四：告知用户结果
+回退成功后，向用户汇报已成功退回至指定版本，并简单列出被恢复和清理的文件。
+
+### 3. 历史快照的磁盘垃圾清理准则 (Clean & GC)
+- 为了防止长期的历史快照无限累积从而占满用户磁盘空间，你应当有意识地对备份库进行清理。
+- 当在 `list` 发现快照节点数较多，或者当用户主动要求“帮我清理一下旧快照”时，你应该在终端运行垃圾回收指令，默认裁剪历史并保留最近的 **30次** 快照：
+  ```powershell
+  python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" clean --keep 30
+  ```
+- **注意**：如果用户要求彻底重置/清空所有快照历史，你应当在终端运行重置命令：
+  ```powershell
+  python "~/.gemini/antigravity/builtin/skills/conversation_memory/scripts/checkpoint.py" --workspace "<当前工作区绝对路径>" reset
+  ```
+```
 
 *💡 **Windows 下的家目录定位指引**：在 Windows 上，请运行 PowerShell 命令 `[System.Environment]::GetFolderPath('UserProfile')` 或执行 Python 代码 `import pathlib; print(pathlib.Path.home())` 来获取你当前所处 Windows 系统的真实用户家目录绝对路径（通常格式为 `C:\Users\<您的用户名>`），随后在 `<家目录>\.gemini\antigravity\builtin\skills\conversation_memory\` 下部署上述文件即可。对于 macOS 电脑，家目录（`~`）即为 `/Users/<您的用户名>`。*
 
 写入完成后，请尝试运行 save 命令创建一个 cp_1 快照进行测试，确认部署成功。
-```
 
 ---
 

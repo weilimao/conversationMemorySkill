@@ -5,6 +5,7 @@ import hashlib
 import shutil
 import argparse
 import difflib
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -64,68 +65,124 @@ class CheckpointManager:
         with open(self.metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-    def _get_managed_files(self) -> list[Path]:
-        """递归扫描工作区中的所有有效文本代码文件"""
-        managed_files = []
+    def _get_git_changed_files(self) -> list[Path]:
+        """通过 git status 获取当前有变动的文件列表"""
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.workspace,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+            changed = []
+            for line in result.stdout.splitlines():
+                if len(line) > 3:
+                    # 获取文件相对路径并去除可能存在的引号
+                    rel_path = line[3:].strip()
+                    if rel_path.startswith('"') and rel_path.endswith('"'):
+                        rel_path = rel_path[1:-1]
+                        try:
+                            # 尝试对 octal 字符转义进行 decode
+                            rel_path = rel_path.encode('utf-8').decode('unicode_escape')
+                        except Exception:
+                            pass
+                    file_path = self.workspace / rel_path
+                    changed.append(file_path)
+            return changed
+        except Exception:
+            return []
+
+    def _get_recently_modified_files(self) -> list[Path]:
+        """局部扫描：获取最近两小时内修改过的文本文件列表"""
+        import time
+        changed = []
+        two_hours_ago = time.time() - 7200
         for root, dirs, files in os.walk(self.workspace):
-            # 过滤忽略的目录
             dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
-            
             root_path = Path(root)
             for file in files:
-                file_path = root_path / file
-                # 排除隐藏文件
                 if file.startswith("."):
                     continue
-                # 判断是否为非二进制文件
-                if not is_binary(file_path):
-                    managed_files.append(file_path)
-        return managed_files
+                file_path = root_path / file
+                if file_path.suffix.lower() in IGNORE_EXTS:
+                    continue
+                try:
+                    mtime = file_path.stat().st_mtime
+                    if mtime > two_hours_ago and not is_binary(file_path):
+                        changed.append(file_path)
+                except Exception:
+                    pass
+        return changed
 
-    def save_checkpoint(self, description: str) -> str:
-        """保存当前工作区的快照到版本库"""
+    def save_checkpoint(self, description: str, files: list[str] = None) -> str:
+        """保存被指定的、或被修改的代码文件状态到快照中"""
         metadata = self._load_metadata()
-        managed_files = self._get_managed_files()
         
-        # 1. 构建当前 Manifest: 相对路径 -> SHA256 哈希
+        # 1. 搜集需要保存快照的目标文件列表
+        target_files = []
+        if files:
+            for f in files:
+                f_path = Path(self.workspace / f).resolve()
+                # 即使文件在本地还未被创建，我们也需要记录它以便回滚时删除
+                target_files.append(f_path)
+        else:
+            # 自动探测：优先使用 git changed files
+            git_files = self._get_git_changed_files()
+            if git_files:
+                target_files = git_files
+            else:
+                # 兜底：获取两小时内修改过的文本文件
+                target_files = self._get_recently_modified_files()
+
+        if not target_files:
+            print("当前工作区无任何文件发生改变，且未传入任何需要追踪的文件，无需保存 Checkpoint。")
+            return metadata["current_checkpoint_id"]
+
+        # 2. 对目标文件进行哈希比对与内容物理备份
         current_manifest = {}
-        for file_path in managed_files:
-            rel_path = file_path.relative_to(self.workspace).as_posix()
-            sha256 = calculate_sha256(file_path)
-            current_manifest[rel_path] = sha256
-            
-            # 2. 如果 store 中没有该哈希的文件，物理拷贝到 store 目录中进行内容寻址存储
-            store_file = self.store_dir / sha256
-            if not store_file.exists():
-                shutil.copy2(file_path, store_file)
-
-        # 3. 对比上一个 checkpoint 计算增量差异 (added, modified, deleted)
-        last_manifest = {}
-        if metadata["checkpoints"]:
-            last_manifest = metadata["checkpoints"][-1]["manifest"]
-
         added = []
         modified = []
         deleted = []
 
-        # 找出修改或新增
-        for rel_path, sha256 in current_manifest.items():
-            if rel_path not in last_manifest:
-                added.append(rel_path)
-            elif last_manifest[rel_path] != sha256:
-                modified.append(rel_path)
-                
-        # 找出删除
-        for rel_path in last_manifest.keys():
-            if rel_path not in current_manifest:
-                deleted.append(rel_path)
+        last_manifest = {}
+        if metadata["checkpoints"]:
+            last_manifest = metadata["checkpoints"][-1].get("manifest", {})
 
-        # 如果自上一个 checkpoint 以来没有任何变化，则不需要重复保存
-        if not added and not modified and not deleted and metadata["checkpoints"]:
-            print("工作区无任何文件变动，无需保存新 Checkpoint。")
+        for file_path in target_files:
+            try:
+                rel_path = file_path.relative_to(self.workspace).as_posix()
+            except Exception:
+                continue
+
+            if file_path.exists() and not is_binary(file_path):
+                sha256 = calculate_sha256(file_path)
+                current_manifest[rel_path] = sha256
+                
+                # 去重复制备份到 store 文件夹中
+                store_file = self.store_dir / sha256
+                if not store_file.exists():
+                    shutil.copy2(file_path, store_file)
+
+                # 判断文件的具体变动类型 (added, modified)
+                if rel_path not in last_manifest:
+                    added.append(rel_path)
+                elif last_manifest[rel_path] != sha256:
+                    modified.append(rel_path)
+            else:
+                # 文件不存在，说明被删除了，或者即将被新建
+                if rel_path in last_manifest:
+                    deleted.append(rel_path)
+                else:
+                    added.append(rel_path)
+
+        # 3. 如果通过自动探测并没有任何增量文件变化，则直接静默退出不创建无用节点
+        if not added and not modified and not deleted and not files:
+            print("工作区无增量文件变动，直接拦截，静默退出。")
             return metadata["current_checkpoint_id"]
 
-        # 4. 生成新 checkpoint 实体
+        # 4. 固化快照元数据
         cp_num = len(metadata["checkpoints"]) + 1
         cp_id = f"cp_{cp_num}"
         
@@ -133,7 +190,7 @@ class CheckpointManager:
             "id": cp_id,
             "timestamp": datetime.now().isoformat(),
             "description": description,
-            "manifest": current_manifest,
+            "manifest": current_manifest, # 极精简 Manifest：只记录在这个快照中被修改或显式追踪的文件路径和哈希
             "changes": {
                 "added": added,
                 "modified": modified,
@@ -146,6 +203,7 @@ class CheckpointManager:
         self._save_metadata(metadata)
         
         print(f"成功保存快照 [{cp_id}]：{description}")
+        print(f"追踪备份文件: {', '.join(current_manifest.keys())}")
         print(f"变动概要: 新增 {len(added)}，修改 {len(modified)}，删除 {len(deleted)}")
         return cp_id
 
@@ -168,61 +226,86 @@ class CheckpointManager:
             print(f"{prefix}[{cp['id']}]  时间: {time_str}  描述: {cp['description']}  ({summary})")
         print("===============================\n")
 
+    def _restore_file(self, rel_path: str, sha256: str):
+        dest_path = self.workspace / rel_path
+        store_file = self.store_dir / sha256
+        if store_file.exists():
+            try:
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(store_file, dest_path)
+                print(f" 恢复/更新文件: {rel_path}")
+            except Exception as e:
+                print(f" 无法恢复文件 {rel_path} - {e}")
+        else:
+            print(f" 致命错误: 版本库中缺失哈希为 {sha256} 的文件 ({rel_path})")
+
     def rollback_to(self, checkpoint_id: str):
-        """完全还原工作区状态到指定 checkpoint"""
+        """双向事务机制：将工作区代码状态精确还原到指定的快照版本"""
         metadata = self._load_metadata()
-        target_cp = next((cp for cp in metadata["checkpoints"] if cp["id"] == checkpoint_id), None)
+        checkpoints = metadata["checkpoints"]
         
-        if not target_cp:
+        target_idx = next((i for i, cp in enumerate(checkpoints) if cp["id"] == checkpoint_id), None)
+        if target_idx is None:
             print(f"错误: 未找到 ID 为 [{checkpoint_id}] 的 Checkpoint 快照。")
             return
 
-        target_manifest = target_cp["manifest"]
-        
-        # 1. 扫描当前工作区所有被管理文件
-        current_managed = self._get_managed_files()
-        
-        # 2. 清理：如果在当前工作区，但在目标 Manifest 中不存在（说明是后添加的），安全删除
-        for file_path in current_managed:
-            rel_path = file_path.relative_to(self.workspace).as_posix()
-            if rel_path not in target_manifest:
-                try:
-                    file_path.unlink()
-                    print(f"删除新增文件: {rel_path}")
-                except Exception as e:
-                    print(f"警告: 无法删除文件 {rel_path} - {e}")
+        current_id = metadata["current_checkpoint_id"]
+        # 如果当前指针无效，默认指向最新一个
+        current_idx = next((i for i, cp in enumerate(checkpoints) if cp["id"] == current_id), len(checkpoints) - 1)
 
-        # 3. 恢复/覆盖：如果目标 Manifest 中的文件在工作区不存在或哈希不一致，从 store 中拷出恢复
-        for rel_path, expected_sha in target_manifest.items():
-            dest_path = self.workspace / rel_path
-            store_file = self.store_dir / expected_sha
-            
-            if not store_file.exists():
-                print(f"致命错误: 无法在版本库中找到哈希为 {expected_sha} 的备份文件 ({rel_path})。")
-                continue
-            
-            # 判断是否需要覆盖
-            need_restore = False
-            if not dest_path.exists():
-                need_restore = True
-            else:
-                current_sha = calculate_sha256(dest_path)
-                if current_sha != expected_sha:
-                    need_restore = True
-            
-            if need_restore:
-                try:
-                    # 确保父目录存在
-                    dest_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(store_file, dest_path)
-                    print(f"恢复/更新文件: {rel_path}")
-                except Exception as e:
-                    print(f"错误: 无法恢复文件 {rel_path} - {e}")
+        if current_idx < target_idx:
+            # 1. 向未来的较新版本前进 (Redo)
+            print(f"正在向未来快照 [{checkpoint_id}] 推进恢复...")
+            for i in range(current_idx + 1, target_idx + 1):
+                cp = checkpoints[i]
+                manifest = cp["manifest"]
+                changes = cp["changes"]
+                
+                # 重新应用该版本下新增或被修改的文件
+                for rel_path in changes["added"] + changes["modified"]:
+                    if rel_path in manifest:
+                        self._restore_file(rel_path, manifest[rel_path])
+                # 重新物理删除在未来版本中被删除的文件
+                for rel_path in changes["deleted"]:
+                    dest_path = self.workspace / rel_path
+                    if dest_path.exists():
+                        try:
+                            dest_path.unlink()
+                            print(f" 删除文件: {rel_path}")
+                        except Exception as e:
+                            print(f" 无法删除文件 {rel_path} - {e}")
+        else:
+            # 2. 向历史的较旧版本回撤 (Undo)
+            print(f"正在向历史快照 [{checkpoint_id}] 回撤修改...")
+            for i in range(current_idx, target_idx, -1):
+                cp = checkpoints[i]
+                manifest = cp["manifest"]
+                changes = cp["changes"]
+                
+                # 撤销新增：物理删除新加的文件
+                for rel_path in changes["added"]:
+                    dest_path = self.workspace / rel_path
+                    if dest_path.exists():
+                        try:
+                            dest_path.unlink()
+                            print(f" 撤销新增(物理删除): {rel_path}")
+                        except Exception as e:
+                            print(f" 无法删除文件 {rel_path} - {e}")
+                
+                # 撤销修改和删除：将文件回滚还原为当前快照中记录的前置（修改前）哈希内容
+                for rel_path in changes["modified"] + changes["deleted"]:
+                    if rel_path in manifest:
+                        self._restore_file(rel_path, manifest[rel_path])
+                    else:
+                        # 说明在更早的历史里该文件也是不存在的，直接执行删除
+                        dest_path = self.workspace / rel_path
+                        if dest_path.exists():
+                            dest_path.unlink()
 
-        # 4. 更新当前的 checkpoint 指针
+        # 更新指针
         metadata["current_checkpoint_id"] = checkpoint_id
         self._save_metadata(metadata)
-        print(f"\n工作区已成功回滚到 [{checkpoint_id}]：{target_cp['description']}")
+        print(f"\n工作区状态成功还原至 [{checkpoint_id}]：{checkpoints[target_idx]['description']}")
 
     def diff_checkpoint(self, checkpoint_id: str):
         """对比当前工作区状态与指定 checkpoint 的差异，打印 unified diff"""
@@ -234,8 +317,13 @@ class CheckpointManager:
             return
 
         target_manifest = target_cp["manifest"]
-        current_files = {file_path.relative_to(self.workspace).as_posix(): file_path 
-                         for file_path in self._get_managed_files()}
+        
+        # 扫描当前被快照追踪管理的相关文件
+        current_files = {}
+        for rel_path in target_manifest.keys():
+            file_path = self.workspace / rel_path
+            if file_path.exists():
+                current_files[rel_path] = file_path
 
         diff_found = False
 
@@ -254,7 +342,6 @@ class CheckpointManager:
                 current_file_path = current_files[rel_path]
                 current_sha = calculate_sha256(current_file_path)
                 if current_sha != target_sha:
-                    # 文件被修改了，输出 diff
                     diff_found = True
                     try:
                         with open(current_file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -268,26 +355,13 @@ class CheckpointManager:
                     except Exception as e:
                         print(f"无法对比文件 {rel_path} 的差异: {e}")
             else:
-                # 文件被删除了
                 diff_found = True
                 print(f"\n- 已删除的文件: {rel_path}")
                 for line in target_lines:
                     print(f"- {line.rstrip()}")
 
-        # 检查哪些文件是新加的
-        for rel_path, current_file_path in current_files.items():
-            if rel_path not in target_manifest:
-                diff_found = True
-                print(f"\n+ 新增的文件: {rel_path}")
-                try:
-                    with open(current_file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        for line in f:
-                            print(f"+ {line.rstrip()}")
-                except Exception:
-                    pass
-
         if not diff_found:
-            print("当前工作区与该 Checkpoint 完全一致，无任何差异。")
+            print("当前工作区与该 Checkpoint 指定追踪的文件状态完全一致，无任何差异。")
 
     def clean_checkpoints(self, keep_count: int) -> int:
         """裁剪历史快照，并对未引用的备份文件进行垃圾回收(GC)"""
@@ -298,7 +372,6 @@ class CheckpointManager:
             print(f"当前快照数({len(checkpoints)})未超过保留上限({keep_count})，无需清理。")
             return 0
             
-        # 需要移除的快照数
         num_to_remove = len(checkpoints) - keep_count
         removed_cps = checkpoints[:num_to_remove]
         keep_cps = checkpoints[num_to_remove:]
@@ -342,7 +415,7 @@ class CheckpointManager:
             print("当前没有找到任何版本库，无需重置。")
 
 def main():
-    parser = argparse.ArgumentParser(description="Antigravity 智能会话修改记忆与回滚工具")
+    parser = argparse.ArgumentParser(description="Antigravity 智能会话修改记忆与回退工具")
     parser.add_argument("--workspace", default=".", help="工作区根目录路径")
     
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -350,6 +423,7 @@ def main():
     # save 子命令
     save_parser = subparsers.add_parser("save", help="保存当前状态")
     save_parser.add_argument("-m", "--message", required=True, help="对当前修改状态的描述信息")
+    save_parser.add_argument("--files", nargs="*", help="本轮需要追踪备份的文件列表（相对路径）")
     
     # list 子命令
     subparsers.add_parser("list", help="列出历史 checkpoint 快照")
@@ -362,7 +436,7 @@ def main():
     diff_parser = subparsers.add_parser("diff", help="展示当前工作区与指定快照的差异")
     diff_parser.add_argument("--id", required=True, help="快照的ID，如 cp_1")
     
-    # clean 子命令 (垃圾回收与快照裁剪)
+    # clean 子命令
     clean_parser = subparsers.add_parser("clean", help="裁剪历史快照并进行垃圾回收(GC)")
     clean_parser.add_argument("--keep", type=int, default=30, help="要保留的最新快照数量，默认30次")
     
@@ -371,11 +445,10 @@ def main():
     
     args = parser.parse_args()
     
-    # 实例化 Manager 并运行命令
     manager = CheckpointManager(args.workspace)
     
     if args.command == "save":
-        manager.save_checkpoint(args.message)
+        manager.save_checkpoint(args.message, args.files)
     elif args.command == "list":
         manager.list_checkpoints()
     elif args.command == "rollback":
