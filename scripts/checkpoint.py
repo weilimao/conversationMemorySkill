@@ -289,6 +289,58 @@ class CheckpointManager:
         if not diff_found:
             print("当前工作区与该 Checkpoint 完全一致，无任何差异。")
 
+    def clean_checkpoints(self, keep_count: int) -> int:
+        """裁剪历史快照，并对未引用的备份文件进行垃圾回收(GC)"""
+        metadata = self._load_metadata()
+        checkpoints = metadata["checkpoints"]
+        
+        if len(checkpoints) <= keep_count:
+            print(f"当前快照数({len(checkpoints)})未超过保留上限({keep_count})，无需清理。")
+            return 0
+            
+        # 需要移除的快照数
+        num_to_remove = len(checkpoints) - keep_count
+        removed_cps = checkpoints[:num_to_remove]
+        keep_cps = checkpoints[num_to_remove:]
+        
+        # 1. 统计所有被保留快照引用的 SHA256 哈希值
+        referenced_hashes = set()
+        for cp in keep_cps:
+            referenced_hashes.update(cp["manifest"].values())
+            
+        # 2. 物理删除不再被任何快照引用的 store 文件 (Garbage Collection)
+        deleted_files_count = 0
+        for file in self.store_dir.iterdir():
+            if file.is_file() and file.name not in referenced_hashes:
+                try:
+                    file.unlink()
+                    deleted_files_count += 1
+                except Exception as e:
+                    print(f"警告: 无法回收悬空文件 {file.name} - {e}")
+                    
+        # 3. 更新 metadata 并写回
+        metadata["checkpoints"] = keep_cps
+        keep_ids = {cp["id"] for cp in keep_cps}
+        if metadata["current_checkpoint_id"] not in keep_ids and keep_cps:
+            metadata["current_checkpoint_id"] = keep_cps[-1]["id"]
+            
+        self._save_metadata(metadata)
+        
+        print(f"已成功裁剪前 {num_to_remove} 个历史快照。")
+        print(f"垃圾回收成功：物理清除了 {deleted_files_count} 个悬空备份文件。当前快照保留数量: {len(keep_cps)}。")
+        return deleted_files_count
+
+    def reset_repository(self):
+        """完全清除所有的快照与备份历史"""
+        if self.meta_dir.exists():
+            try:
+                shutil.rmtree(self.meta_dir)
+                print("已成功清空所有的快照数据库及备份文件实体。")
+            except Exception as e:
+                print(f"错误: 无法重置版本库 - {e}")
+        else:
+            print("当前没有找到任何版本库，无需重置。")
+
 def main():
     parser = argparse.ArgumentParser(description="Antigravity 智能会话修改记忆与回滚工具")
     parser.add_argument("--workspace", default=".", help="工作区根目录路径")
@@ -310,6 +362,13 @@ def main():
     diff_parser = subparsers.add_parser("diff", help="展示当前工作区与指定快照的差异")
     diff_parser.add_argument("--id", required=True, help="快照的ID，如 cp_1")
     
+    # clean 子命令 (垃圾回收与快照裁剪)
+    clean_parser = subparsers.add_parser("clean", help="裁剪历史快照并进行垃圾回收(GC)")
+    clean_parser.add_argument("--keep", type=int, default=30, help="要保留的最新快照数量，默认30次")
+    
+    # reset 子命令
+    subparsers.add_parser("reset", help="彻底清空当前工作区的所有快照和备份实体")
+    
     args = parser.parse_args()
     
     # 实例化 Manager 并运行命令
@@ -323,6 +382,10 @@ def main():
         manager.rollback_to(args.id)
     elif args.command == "diff":
         manager.diff_checkpoint(args.id)
+    elif args.command == "clean":
+        manager.clean_checkpoints(args.keep)
+    elif args.command == "reset":
+        manager.reset_repository()
 
 if __name__ == "__main__":
     main()

@@ -47,6 +47,19 @@ python scripts/checkpoint.py --workspace "." diff --id cp_1
 python scripts/checkpoint.py --workspace "." rollback --id cp_1
 ```
 
+### 5. 裁剪历史快照并进行垃圾回收 (GC)
+默认会自动裁剪并只保留最近的 **30 次** 快照。超出该上限的历史快照元数据会被抹除，且没有任何快照引用的悬空文件会被物理删除以释放空间：
+```bash
+python scripts/checkpoint.py --workspace "." clean --keep 30
+```
+
+### 6. 彻底重置清空快照历史 (Reset)
+物理删除所有快照记录，回到最干净的无记忆初始状态：
+```bash
+python scripts/checkpoint.py --workspace "." reset
+```
+
+
 ---
 
 ## 🤖 AI 自动化安装提示词 (AI Auto-installation Prompt)
