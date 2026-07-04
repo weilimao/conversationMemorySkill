@@ -79,6 +79,54 @@ class CheckpointManager:
         if not self.metadata_path.exists():
             self._save_metadata({"checkpoints": [], "current_checkpoint_id": None})
 
+        # 自动防 Git 污染写入
+        self._ensure_git_ignored()
+
+    def _ensure_git_ignored(self):
+        """
+        自动防 Git 污染：将备份目录写入本地 Git 专属忽略文件或 .gitignore 中，
+        使用户完全不需要手动配置忽略，避免产生 Untracked files。
+        """
+        git_exclude_path = self.workspace / ".git" / "info" / "exclude"
+        ignored_lines = [".checkpoints/", ".gemini/"]
+        
+        # 1. 优先尝试本地 Git 私有忽略配置（.git/info/exclude）
+        if git_exclude_path.parent.exists():
+            try:
+                content = ""
+                if git_exclude_path.exists():
+                    with open(git_exclude_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                
+                lines_to_add = [line for line in ignored_lines if line not in content]
+                
+                if lines_to_add:
+                    suffix = "\n" if not content.endswith("\n") and content else ""
+                    with open(git_exclude_path, "a", encoding="utf-8") as f:
+                        f.write(suffix + "\n".join(lines_to_add) + "\n")
+                    print("已自动向本地 Git 私有忽略配置 (.git/info/exclude) 写入备份忽略项。")
+                return
+            except Exception as e:
+                print(f"写入 Git Exclude 失败: {e}")
+                
+        # 2. 兜底写入本地的 .gitignore
+        gitignore_path = self.workspace / ".gitignore"
+        try:
+            content = ""
+            if gitignore_path.exists():
+                with open(gitignore_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+            
+            lines_to_add = [line for line in ignored_lines if line not in content]
+            
+            if lines_to_add:
+                suffix = "\n" if not content.endswith("\n") and content else ""
+                with open(gitignore_path, "a", encoding="utf-8") as f:
+                    f.write(suffix + "\n".join(lines_to_add) + "\n")
+                print("已自动向本地 .gitignore 写入备份忽略项。")
+        except Exception as e:
+            print(f"自动写入 .gitignore 失败: {e}")
+
     def _load_metadata(self) -> dict:
         try:
             with open(self.metadata_path, "r", encoding="utf-8") as f:
