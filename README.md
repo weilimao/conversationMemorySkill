@@ -17,12 +17,13 @@ e:\GPT\conversationMemorySkill\
 
 ---
 
-## 核心机制：增量按需快照与双向事务还原
-与普通的简单目录打包备份不同，本工具借鉴了 Git 底层数据库的设计精髓：
-1. **去重存储**：备份文件以内容的 SHA256 哈希值作为文件名存储在 `.checkpoints/store/<sha256>` 下。相同内容的文件无论属于哪个版本，在磁盘上都只占用一份空间。
+## 核心机制：增量快照、沙箱隔离与并发锁
+
+与普通的简单目录打包备份不同，本工具借鉴了 Git 底层数据库与分布式系统的核心设计精髓：
+1. **去重存储（CAS）**：备份文件以内容的 SHA256 哈希值作为文件名存储在 `.checkpoints/store/<sha256>` 下。相同内容的文件无论属于哪个版本、哪个会话，在磁盘上都只占用一份空间。
 2. **增量按需备份 (On-Demand Backup)**：AI 助手在每次准备修改代码前，仅通过 `--files` 指明其本轮计划修改或新建的特定文件。脚本**只针对这些文件**计算 SHA256 并进行备份，这彻底杜绝了全项目无差别扫描与历史库膨胀。
-3. **双向事务还原算法 (Bidirectional Transaction)**：
-   在回退时，系统自动识别当前指针与目标快照的位置差，进行 **逆向撤销 (Undo)** 或 **正向重做 (Redo)**，只对本次快照追踪的相关文件进行物理新增/覆盖/删除，对项目的其他无关文件不做任何干扰。
+3. **多会话沙箱隔离 (Session Sandboxing)**：支持传入 `--session <Session_ID>`。不同 AI 对话的备份历史元数据将被隔绝在各自独立的沙箱中（`.checkpoints/sessions/<session_id>/metadata.json`），实现并发会话快照解耦。
+4. **写冲突乐观锁校验 (Drift Checking)**：在回退时，还原引擎会对目标文件执行物理哈希漂移校验。如果发现当前磁盘上的文件自备份以来被其他会话或用户二次修改过（哈希不匹配），默认会安全拦截，防止静默覆盖导致数据丢失。
 
 ---
 
@@ -33,35 +34,39 @@ e:\GPT\conversationMemorySkill\
 ### 1. 保存当前工作区快照
 你可以使用 `--files` 显式指定本轮计划修改或新建的文件路径（空格分隔）。这是**强烈推荐**的做法，不仅执行极速，而且能避免元数据记录不必要的项目其他无关文件。
 ```bash
-python scripts/checkpoint.py --workspace "." save -m "完成主页登录逻辑开发" --files "src/components/Login.vue" "server/auth.go"
+python scripts/checkpoint.py --workspace "." --session "session_A" save -m "完成主页登录逻辑开发" --files "src/components/Login.vue" "server/auth.go"
 ```
 *(注意：如果不加 `--files` 参数，脚本将自动根据 Git 变动状态 `git status` 抓取需要备份的文件，若无 Git 仓库则会自动收集最近 2 小时内被修改过的文本文件。)*
 
 ### 2. 查看快照历史记录列表
 ```bash
-python scripts/checkpoint.py --workspace "." list
+python scripts/checkpoint.py --workspace "." --session "session_A" list
 ```
 
 ### 3. 查看当前代码与指定快照的差异 (Diff)
 ```bash
-python scripts/checkpoint.py --workspace "." diff --id cp_1
+python scripts/checkpoint.py --workspace "." --session "session_A" diff --id cp_1
 ```
 
-### 4. 精确回退到指定快照状态
+### 4. 精确回退到指定快照状态与冲突解决策略
+如果目标文件已被外部修改，回退引擎会触发漂移安全锁。你可以通过 `--conflict-policy` 参数来配置冲突策略：
+- `abort`（默认）：安全拦截回退，直接退出以保护外部代码。
+- `force`：强行覆盖，无视外部修改，直接退回备份时的历史状态。
+- `keep-current`：跳过还原发生冲突的文件，保留最新修改，仅回滚无冲突的文件。
 ```bash
-python scripts/checkpoint.py --workspace "." rollback --id cp_1
+python scripts/checkpoint.py --workspace "." --session "session_A" rollback --id cp_1 --conflict-policy force
 ```
 
 ### 5. 裁剪历史快照并进行垃圾回收 (GC)
 默认会自动裁剪并只保留最近的 **30次** 快照。超出该上限的历史快照元数据会被抹除，且没有任何快照引用的悬空文件会被物理删除以释放空间：
 ```bash
-python scripts/checkpoint.py --workspace "." clean --keep 30
+python scripts/checkpoint.py --workspace "." --session "session_A" clean --keep 30
 ```
 
 ### 6. 彻底重置清空快照历史 (Reset)
 物理删除所有快照记录，回到最干净的无记忆初始状态：
 ```bash
-python scripts/checkpoint.py --workspace "." reset
+python scripts/checkpoint.py --workspace "." --session "session_A" reset
 ```
 
 ---
@@ -74,7 +79,7 @@ python scripts/checkpoint.py --workspace "." reset
 你是资深系统开发助手。现在我们需要在当前系统中安装一个全局或项目级的代码修改记忆与安全回退系统，用于在编写代码前自动备份，并在回滚时精准无损地物理还原。
 
 第一步【自检并定位 AI 助手平台】：
-请你首先智能识别你当前所在的 AI 助手/Agent 平台类型，并按照以下规则进行平台自适应安装：
+请你首先智能识别 you当前所在的 AI 助手/Agent 平台类型，并按照以下规则进行平台自适应安装：
 
 1. 如果你是 Google Antigravity (IDE / CLI / Agent) 系列或 Gemini CLI (agy)：
    - 你的全局插件技能根目录在「家目录」下的 `.gemini\config\plugins\conversation-memory-plugin\skills\conversation_memory\`。
@@ -108,12 +113,14 @@ python scripts/checkpoint.py --workspace "." reset
 
 * 每次修改文件前的备份准则 (Save Checkpoint)
   在你执行任何代码修改（无论是主要功能开发，还是极细微的Bug修复与微调，如调用 replace_file_content, write_to_file, multi_replace_file_content 等）的前一步，你必须首先在终端运行保存快照指令，且必须使用 --files 参数显式指明你本轮计划修改或新建的特定文件相对路径：
-  python "<checkpoint.py的安装路径>" --workspace "<当前工作区绝对路径>" save -m "<描述本次修改意图>" --files <本轮即将修改或新建的所有文件路径，空格分隔>
+  python "<checkpoint.py的安装路径>" --workspace "<当前工作区绝对路径>" --session "<当前会话唯一ID>" save -m "<描述本次修改意图>" --files <本轮即将修改或新建的所有文件路径，空格分隔>
 
 * 当用户要求回滚或撤销时 (Rollback)
   严禁自行人肉重写文件恢复！请按以下步骤操作：
-  1. 运行 python "<checkpoint.py的安装路径>" --workspace "<当前工作区绝对路径>" list 列出快照。
-  2. 找到目标 ID，运行 python "<checkpoint.py的安装路径>" --workspace "<当前工作区绝对路径>" rollback --id <checkpoint_id> 进行双向事务回滚。
+  1. 运行 python "<checkpoint.py的安装路径>" --workspace "<当前工作区绝对路径>" --session "<当前会话唯一ID>" list 列出快照。
+  2. 找到目标 ID，运行并配置冲突覆盖策略：
+     python "<checkpoint.py的安装路径>" --workspace "<当前工作区绝对路径>" --session "<当前会话唯一ID>" rollback --id <checkpoint_id> --conflict-policy [abort|force|keep-current]
+     （注：冲突策略默认为 abort 拦截保护；若用户明确要求强行恢复覆盖，则指定 force）
   3. 报告回滚结果。
 ---
 
@@ -129,6 +136,6 @@ python scripts/checkpoint.py --workspace "." reset
 1. **Cursor & Windsurf**：
    本仓库根目录下已内置了 [`.cursorrules`](file:///e:/GPT/conversationMemorySkill/.cursorrules) 配置文件。当您使用 Cursor 或 Windsurf 打开本工程并进行 AI 编程时，编辑器会自动读取该规则。AI 助手将在每次帮您修改代码前自动保存 Checkpoint，在您要求回滚时自动执行恢复，无需进行任何全局安装！
 2. **Claude Code**：
-   Claude 会自动解析本工程的 [`.cursorrules`](file:///e:/GPT/conversationMemorySkill/.cursorrules)，或者您也可以将该规则直接复制作为项目的开发规则（`Instructions`），它就会在修改文件前调用本地 `python scripts/checkpoint.py save`。
+   Claude 会自动解析本工程 of [`.cursorrules`](file:///e:/GPT/conversationMemorySkill/.cursorrules)，或者您也可以将该规则直接复制作为项目的开发规则（`Instructions`），它就会在修改文件前调用本地 `python scripts/checkpoint.py save`。
 3. **Copilot / Codex**：
    会自动识别本地规则文件，执行同等的安全防护。

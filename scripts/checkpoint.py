@@ -43,7 +43,7 @@ def calculate_sha256(file_path: Path) -> str:
     return sha256.hexdigest()
 
 class CheckpointManager:
-    def __init__(self, workspace_path: str):
+    def __init__(self, workspace_path: str, session_id: str = None):
         self.workspace = Path(workspace_path).resolve()
         self.meta_dir = self.workspace / ".checkpoints"
         
@@ -62,10 +62,20 @@ class CheckpointManager:
                 print(f"警告: 迁移旧备份目录失败 - {e}")
         
         self.store_dir = self.meta_dir / "store"
-        self.metadata_path = self.meta_dir / "metadata.json"
+        
+        # 根据是否传入 session_id 划定独立的元数据沙箱
+        if session_id:
+            safe_session_id = "".join(c for c in session_id if c.isalnum() or c in "-_")
+            self.metadata_dir = self.meta_dir / "sessions" / safe_session_id
+        else:
+            self.metadata_dir = self.meta_dir
+            
+        self.metadata_path = self.metadata_dir / "metadata.json"
         
         # 初始化目录
         self.store_dir.mkdir(parents=True, exist_ok=True)
+        self.metadata_dir.mkdir(parents=True, exist_ok=True)
+        
         if not self.metadata_path.exists():
             self._save_metadata({"checkpoints": [], "current_checkpoint_id": None})
 
@@ -254,8 +264,47 @@ class CheckpointManager:
         else:
             print(f" 致命错误: 版本库中缺失哈希为 {sha256} 的文件 ({rel_path})")
 
-    def rollback_to(self, checkpoint_id: str):
-        """双向事务机制：将工作区代码状态精确还原到指定的快照版本"""
+    def _check_drift_and_resolve(self, rel_path: str, expected_current_sha: str, conflict_policy: str) -> bool:
+        """
+        校验文件是否发生外部二次修改 (Drift)。
+        如果未发生冲突，返回 True (允许覆盖/还原/删除)。
+        如果发生冲突，根据 conflict_policy 决策：
+          - 'abort': 报错抛出异常并终止。
+          - 'force': 强行允许覆盖，返回 True。
+          - 'keep-current': 跳过该文件还原，返回 False。
+        """
+        dest_path = self.workspace / rel_path
+        
+        # 如果当前文件在磁盘上根本不存在，不需要校验漂移，直接允许执行
+        if not dest_path.exists():
+            return True
+            
+        current_sha = calculate_sha256(dest_path)
+        
+        # 允许直接执行的情况：物理哈希与本会话当时预期的哈希一致
+        if current_sha == expected_current_sha:
+            return True
+            
+        # 发生写冲突！
+        print(f"\n[⚠️ 冲突检测] 检测到文件已发生外部二次修改: {rel_path}")
+        print(f"  - 磁盘物理哈希: {current_sha}")
+        print(f"  - 本会话预期哈希: {expected_current_sha}")
+        
+        if conflict_policy == "force":
+            print("  - 解决策略: [force] 强行覆盖外部修改。")
+            return True
+        elif conflict_policy == "keep-current":
+            print("  - 解决策略: [keep-current] 保留磁盘当前内容，跳过本次还原。")
+            return False
+        else: # abort 
+            print("  - 解决策略: [abort] 回滚中止。")
+            raise RuntimeError(
+                f"回滚冲突被乐观锁拦截：文件 '{rel_path}' 已被外部会话二次修改，为保护代码安全已终止回滚。\n"
+                f"如果您要强行覆盖，请指定参数 '--conflict-policy force'。"
+            )
+
+    def rollback_to(self, checkpoint_id: str, conflict_policy: str = "abort"):
+        """双向事务机制：将工作区代码状态精确还原到指定的快照版本，带有并发写冲突校验乐观锁"""
         metadata = self._load_metadata()
         checkpoints = metadata["checkpoints"]
         
@@ -267,54 +316,88 @@ class CheckpointManager:
         current_id = metadata["current_checkpoint_id"]
         current_idx = next((i for i, cp in enumerate(checkpoints) if cp["id"] == current_id), len(checkpoints) - 1)
 
-        if current_idx < target_idx:
-            # 1. 向未来的较新版本前进 (Redo)
-            print(f"正在向未来快照 [{checkpoint_id}] 推进恢复...")
-            for i in range(current_idx + 1, target_idx + 1):
-                cp = checkpoints[i]
-                manifest = cp["manifest"]
-                changes = cp["changes"]
-                
-                # 重新应用该版本下新增或被修改的文件
-                for rel_path in changes["added"] + changes["modified"]:
-                    if rel_path in manifest:
-                        self._restore_file(rel_path, manifest[rel_path])
-                # 重新物理删除在未来版本中被删除的文件
-                for rel_path in changes["deleted"]:
-                    dest_path = self.workspace / rel_path
-                    if dest_path.exists():
-                        try:
-                            dest_path.unlink()
-                            print(f" 删除文件: {rel_path}")
-                        except Exception as e:
-                            print(f" 无法删除文件 {rel_path} - {e}")
-        else:
-            # 2. 向历史的较旧版本回撤 (Undo)
-            print(f"正在向历史快照 [{checkpoint_id}]回撤修改...")
-            for i in range(current_idx, target_idx, -1):
-                cp = checkpoints[i]
-                manifest = cp["manifest"]
-                changes = cp["changes"]
-                
-                # 撤销新增：物理删除新加的文件
-                for rel_path in changes["added"]:
-                    dest_path = self.workspace / rel_path
-                    if dest_path.exists():
-                        try:
-                            dest_path.unlink()
-                            print(f" 撤销新增(物理删除): {rel_path}")
-                        except Exception as e:
-                            print(f" 无法删除文件 {rel_path} - {e}")
-                
-                # 撤销修改和删除：将文件回滚还原为当前快照中记录的前置（修改前）哈希内容
-                for rel_path in changes["modified"] + changes["deleted"]:
-                    if rel_path in manifest:
-                        self._restore_file(rel_path, manifest[rel_path])
-                    else:
-                        # 说明在更早的历史里该文件也是不存在的，直接执行删除
-                        dest_path = self.workspace / rel_path
-                        if dest_path.exists():
-                            dest_path.unlink()
+        if current_idx == target_idx:
+            print(f"当前已处于快照 [{checkpoint_id}]，无需回滚。")
+            return
+
+        try:
+            if current_idx < target_idx:
+                # 1. 向未来推进 (Redo)
+                print(f"正在向未来快照 [{checkpoint_id}] 推进恢复...")
+                for i in range(current_idx + 1, target_idx + 1):
+                    cp = checkpoints[i]
+                    manifest = cp["manifest"]
+                    changes = cp["changes"]
+                    
+                    # 重新应用新增或被修改的文件
+                    for rel_path in changes["added"] + changes["modified"]:
+                        if rel_path in manifest:
+                            expected_sha = None
+                            if i > 1:
+                                expected_sha = checkpoints[i-2]["manifest"].get(rel_path)
+                            
+                            # 校验通过后再写入
+                            if expected_sha is None or self._check_drift_and_resolve(rel_path, expected_sha, conflict_policy):
+                                self._restore_file(rel_path, manifest[rel_path])
+                                
+                    # 重新删除在未来版本中被删除的文件
+                    for rel_path in changes["deleted"]:
+                        expected_sha = None
+                        if i > 1:
+                            expected_sha = checkpoints[i-2]["manifest"].get(rel_path)
+                        
+                        if expected_sha is None or self._check_drift_and_resolve(rel_path, expected_sha, conflict_policy):
+                            dest_path = self.workspace / rel_path
+                            if dest_path.exists():
+                                try:
+                                    dest_path.unlink()
+                                    print(f" 删除文件: {rel_path}")
+                                except Exception as e:
+                                    print(f" 无法删除文件 {rel_path} - {e}")
+            else:
+                # 2. 向历史回撤 (Undo)
+                print(f"正在向历史快照 [{checkpoint_id}] 回撤修改...")
+                for i in range(current_idx, target_idx, -1):
+                    cp = checkpoints[i]
+                    manifest = cp["manifest"]
+                    changes = cp["changes"]
+                    
+                    # 撤销新增：物理删除在该快照中新加的文件
+                    for rel_path in changes["added"]:
+                        expected_sha = manifest.get(rel_path)
+                        if expected_sha is None or self._check_drift_and_resolve(rel_path, expected_sha, conflict_policy):
+                            dest_path = self.workspace / rel_path
+                            if dest_path.exists():
+                                try:
+                                    dest_path.unlink()
+                                    print(f" 撤销新增(物理删除): {rel_path}")
+                                except Exception as e:
+                                    print(f" 无法删除文件 {rel_path} - {e}")
+                    
+                    # 撤销修改和删除：将文件还原为本快照前置（修改前）哈希内容
+                    for rel_path in changes["modified"] + changes["deleted"]:
+                        prev_sha = None
+                        if i > 1:
+                            prev_sha = checkpoints[i-2]["manifest"].get(rel_path)
+                        
+                        current_expected_sha = manifest.get(rel_path)
+                        
+                        if current_expected_sha is None or self._check_drift_and_resolve(rel_path, current_expected_sha, conflict_policy):
+                            if prev_sha:
+                                self._restore_file(rel_path, prev_sha)
+                            else:
+                                # 在更早的历史里它并不存在，撤销修改/恢复即为物理删除
+                                dest_path = self.workspace / rel_path
+                                if dest_path.exists():
+                                    try:
+                                        dest_path.unlink()
+                                        print(f" 撤销修改并删除: {rel_path}")
+                                    except Exception as e:
+                                        print(f" 无法删除文件 {rel_path} - {e}")
+                                        
+        except RuntimeError as err:
+            print(f"\n❌ 回滚被安全拦截中断：{err}")
+            sys.exit(1)
 
         # 更新指针
         metadata["current_checkpoint_id"] = checkpoint_id
@@ -332,7 +415,6 @@ class CheckpointManager:
 
         target_manifest = target_cp["manifest"]
         
-        # 扫描当前被快照追踪管理的相关文件
         current_files = {}
         for rel_path in target_manifest.keys():
             file_path = self.workspace / rel_path
@@ -431,6 +513,7 @@ class CheckpointManager:
 def main():
     parser = argparse.ArgumentParser(description="Antigravity 智能会话修改记忆与回退工具")
     parser.add_argument("--workspace", default=".", help="工作区根目录路径")
+    parser.add_argument("--session", "--session-id", default=None, help="当前AI会话的唯一ID，用于做并发沙箱隔离")
     
     subparsers = parser.add_subparsers(dest="command", required=True)
     
@@ -445,6 +528,8 @@ def main():
     # rollback 子命令
     rollback_parser = subparsers.add_parser("rollback", help="回滚至指定快照")
     rollback_parser.add_argument("--id", required=True, help="快照的ID，如 cp_1")
+    rollback_parser.add_argument("--conflict-policy", choices=["abort", "force", "keep-current"], default="abort",
+                                 help="当检测到外部会话修改冲突时的恢复策略: abort(中止, 默认), force(强行覆盖), keep-current(跳过保留)")
     
     # diff 子命令
     diff_parser = subparsers.add_parser("diff", help="展示当前工作区与指定快照的差异")
@@ -459,14 +544,14 @@ def main():
     
     args = parser.parse_args()
     
-    manager = CheckpointManager(args.workspace)
+    manager = CheckpointManager(args.workspace, args.session)
     
     if args.command == "save":
         manager.save_checkpoint(args.message, args.files)
     elif args.command == "list":
         manager.list_checkpoints()
     elif args.command == "rollback":
-        manager.rollback_to(args.id)
+        manager.rollback_to(args.id, args.conflict_policy)
     elif args.command == "diff":
         manager.diff_checkpoint(args.id)
     elif args.command == "clean":
