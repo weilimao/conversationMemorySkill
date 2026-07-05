@@ -71,6 +71,30 @@ python scripts/checkpoint.py --workspace "." --session "session_A" reset
 
 ---
 
+## 🛡️ 原子化写入代理脚本 (scripts/safe_edit.py)
+
+为了彻底解决 AI 助手在复杂场景下经常遗漏前置备份（丢三落四）的问题，本项目特别设计并集成了原子化写入代理脚本 `safe_edit.py`。该脚本负责将“保存快照”与“执行文件写入/替换”合并为一个原子操作，在物理上保障修改前 100% 执行了备份。
+
+### 1. 原子化内容替换
+通过命令行参数直接指定要替换的旧文本和新文本：
+```bash
+python scripts/safe_edit.py --workspace "." --session "session_A" --file "src/main.py" --message "fix homepage alignment" --mode replace --target "class Header" --replacement "class AppHeader"
+```
+
+### 2. 避免转义字符破坏（推荐多行代码修改时使用）
+若需要替换包含复杂引号或多行的代码块，可以直接将旧代码段和新代码段分别写入临时文件（如 `target.tmp` 和 `replace.tmp`），然后执行：
+```bash
+python scripts/safe_edit.py --workspace "." --session "session_A" --file "src/main.py" --message "refactor routing logic" --mode replace --target-from-file "target.tmp" --replacement-from-file "replace.tmp"
+```
+
+### 3. 原子化全量文件覆盖或新建
+在 `write` 模式下直接写入或覆盖文件内容：
+```bash
+python scripts/safe_edit.py --workspace "." --session "session_A" --file "src/new_config.json" --message "add database config" --mode write --replacement "{\"port\": 3306}"
+```
+
+---
+
 ## 🤖 AI 自动化安装提示词 (AI Auto-installation Prompt)
 
 如果您在新的电脑、系统或全新的开发会话中需要使用此技能，可以直接复制以下提示词并发送给新的 AI 助手，它将**智能识别自身所在的 AI 平台**并自动将此工具配置为最适合它的运行环境：

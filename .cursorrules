@@ -7,15 +7,24 @@ You are a senior developer agent. To ensure absolute code safety and prevent cha
 
 ## 🚨 CRITICAL RULES FOR FILE EDITING
 
-### 1. BEFORE any file modifications (Create/Edit/Delete)
-You **MUST** first run the save command to record the current state. Only perform actual file writes AFTER this backup command finishes.
-To prevent concurrency conflicts with other AI threads/conversations, **you MUST pass the `--session` flag with your current thread/session ID, and use `--files` to specify only the target files.**
+### 1. BEFORE and DURING any file modifications (Create/Edit/Delete)
+You **MUST NOT** modify files using native write/edit tools directly unless absolutely necessary. Instead, you **MUST** run the atomic write proxy script `safe_edit.py` which automatically performs pre-write backups and applies modifications.
+To prevent concurrency conflicts, always provide `--session` with your current session ID.
 
+For simple content replacement:
 ```bash
-python scripts/checkpoint.py --session "<Your_Session_Or_Thread_ID>" save -m "<Description>" --files <files_to_modify>
+python scripts/safe_edit.py --session "<Your_Session_Or_Thread_ID>" --file "<relative_file_path>" --message "<Description>" --mode replace --target "<exact_old_content>" --replacement "<new_content>"
 ```
-*Example:*
-`python scripts/checkpoint.py --session "session_api_dev" save -m "Implement validation logic" --files "src/App.vue" "server/api.go"`
+
+To avoid command-line quoting/escaping issues for complex or multi-line code blocks, write your target and replacement blocks into temporary files, then execute:
+```bash
+python scripts/safe_edit.py --session "<Your_Session_Or_Thread_ID>" --file "<relative_file_path>" --message "<Description>" --mode replace --target-from-file "<temp_target_file>" --replacement-from-file "<temp_replacement_file>"
+```
+
+To create a new file or completely overwrite an existing file:
+```bash
+python scripts/safe_edit.py --session "<Your_Session_Or_Thread_ID>" --file "<relative_file_path>" --message "<Description>" --mode write --replacement "<new_content_or_from_file_options>"
+```
 
 ### 2. WHEN the user requests rollback or undo
 **NEVER** manually rewrite files. Perform an absolute, safe rollback:
